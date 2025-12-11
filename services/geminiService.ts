@@ -6,10 +6,9 @@ import { AgentId, RoutingResult, Message } from "../types";
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 // 1. ROUTING PHASE
-// We use a lightweight model or a specific configuration to classify the intent.
 export const routeRequest = async (userQuery: string): Promise<RoutingResult> => {
   try {
-    const modelId = "gemini-2.5-flash"; // Fast and capable enough for routing
+    const modelId = "gemini-2.5-flash"; 
     
     const response = await ai.models.generateContent({
       model: modelId,
@@ -47,31 +46,30 @@ export const routeRequest = async (userQuery: string): Promise<RoutingResult> =>
 
   } catch (error) {
     console.error("Routing error:", error);
-    // Fallback to general if routing fails
     return { targetAgentId: 'general', reasoning: "Routing failed, defaulting to general." };
   }
 };
 
 // 2. EXECUTION PHASE
-// Execute the query using the selected agent's persona and tools.
 export const generateAgentResponse = async (
   agentId: AgentId, 
   userQuery: string,
   history: Message[]
 ): Promise<{ text: string; sources: Array<{ uri: string; title: string }> }> => {
   
-  const agentConfig = AGENTS[agentId];
-  if (!agentConfig) throw new Error("Invalid agent ID");
-
-  // Construct history for context, excluding the latest user message which we send in contents
-  // Limiting history to last 5 turns to keep context clean
-  const chatHistory = history.slice(-10).map(msg => ({
-    role: msg.role,
-    parts: [{ text: msg.content }]
-  }));
-
   try {
-    // Configure tools: Grounding for Medical, General, Staff (as per prompt requirements)
+    const agentConfig = AGENTS[agentId];
+    if (!agentConfig) {
+      throw new Error(`CONFIGURATION_ERROR: Invalid agent ID '${agentId}'`);
+    }
+
+    // Construct history for context
+    const chatHistory = history.slice(-10).map(msg => ({
+      role: msg.role,
+      parts: [{ text: msg.content }]
+    }));
+
+    // Configure tools
     const tools = [];
     if (['medical_info', 'general', 'doctor_staff', 'patient_mgmt'].includes(agentId)) {
         tools.push({ googleSearch: {} });
@@ -91,19 +89,38 @@ export const generateAgentResponse = async (
 
     const text = response.text || "I apologize, but I could not generate a response.";
     
-    // Extract grounding chunks if available
+    // Extract grounding chunks
     const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
     const sources = chunks
       .filter((c: any) => c.web?.uri && c.web?.title)
       .map((c: any) => ({ uri: c.web.uri, title: c.web.title }));
 
-    // De-duplicate sources
     const uniqueSources = Array.from(new Map(sources.map((item: any) => [item.uri, item])).values()) as Array<{ uri: string; title: string }>;
 
     return { text, sources: uniqueSources };
 
-  } catch (error) {
-    console.error(`Agent ${agentId} error:`, error);
-    return { text: "I encountered an error while processing your request.", sources: [] };
+  } catch (error: any) {
+    console.error(`Agent ${agentId} error details:`, error);
+
+    let errorMessage = "An unexpected error occurred while processing your request.";
+    
+    // Error Handling Logic
+    const errorStr = error.toString().toLowerCase();
+    
+    if (errorStr.includes("api key") || errorStr.includes("403")) {
+      errorMessage = "System Configuration Error: The API Key is invalid or missing. Please contact the administrator.";
+    } else if (errorStr.includes("429") || errorStr.includes("quota")) {
+      errorMessage = "System Overload: We are receiving too many requests right now. Please try again in a few moments.";
+    } else if (errorStr.includes("503") || errorStr.includes("overloaded")) {
+      errorMessage = "The AI service is currently unavailable due to high traffic. Please try again later.";
+    } else if (errorStr.includes("fetch failed") || errorStr.includes("network")) {
+      errorMessage = "Network Error: Please check your internet connection and try again.";
+    } else if (errorStr.includes("configuration_error")) {
+      errorMessage = "Internal Error: The requested agent could not be found.";
+    } else if (errorStr.includes("candidate")) {
+        errorMessage = "The system filtered the response due to safety settings. Please rephrase your query.";
+    }
+
+    return { text: errorMessage, sources: [] };
   }
 };
