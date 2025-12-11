@@ -1,0 +1,5 @@
+{
+  "name": "Hospital Nexus AI",
+  "description": "A multi-agent hospital operations system that routes user queries to specialized AI agents for appointments, medical info, staff management, and patient records.",
+  "requestFramePermissions": []
+}
